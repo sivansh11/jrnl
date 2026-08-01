@@ -6,7 +6,7 @@ import os
 import re
 import sys
 import subprocess
-from datetime import datetime
+import datetime
 from pathlib import Path
 
 import openai
@@ -36,7 +36,7 @@ def add(entry: str) -> None:
     j = {
         'entry': entry,
     }
-    name = datetime.now().strftime('%d-%m-%Y--%H-%M-%S') + '.json.pending'
+    name = datetime.datetime.now().strftime('%d-%m-%Y--%H-%M-%S') + '.json.pending'
     with open(JRNL_FOLDER / name, 'w') as f:
         json.dump(j, f, indent=2)
     if JRNL_DEBUG:
@@ -112,6 +112,35 @@ def sync() -> None:
     embeddings_path.write_text(json.dumps(embeddings, indent=2))
 
 
+def ls(days: int) -> None:
+    now = datetime.datetime.now()
+    end = now - datetime.timedelta(days=days)
+    entries = []
+    for path in JRNL_FOLDER.glob('*.json*'):
+        if path.stem == 'embeddings':
+            continue
+        pending = path.name.endswith('.pending')
+        name = path.name.removesuffix('.pending').removesuffix('.json')
+        dt = datetime.datetime.strptime(name, '%d-%m-%Y--%H-%M-%S')
+        if end <= dt <= now:
+            with open(path) as f:
+                data = json.load(f)
+            entries.append((dt, data['entry'], pending, data.get('chunks')))
+    if not entries:
+        print('no entries found')
+        return
+    entries.sort(key=lambda e: e[0], reverse=True)
+    for dt, entry, pending, chunks in entries:
+        heading = f"[{dt.strftime('%d-%m-%Y %H:%M:%S')}]"
+        if pending:
+            heading += ' (pending)'
+        print(heading)
+        print(entry)
+        if JRNL_DEBUG and chunks:
+            for c in chunks:
+                print(f"  [{c['id']}] {c['chunk']}")
+
+
 def main():
     parser = argparse.ArgumentParser(prog='jrnl')
     sub = parser.add_subparsers(dest='command', title='commands')
@@ -121,6 +150,9 @@ def main():
     _ = add_parser.add_argument('entry', help='your jrnl entry')
 
     sync_parser = sub.add_parser('sync', help='sync jrnl entries')
+
+    ls_parser = sub.add_parser('ls', help='list entries')
+    _ = ls_parser.add_argument('--days', type=int, default=3, help='entries from the last n days')
 
     args = parser.parse_args()
 
@@ -145,6 +177,9 @@ def main():
 
     if args.command == 'sync':
         sync()
+
+    if args.command == 'ls':
+        ls(args.days)
 
 
 if __name__ == '__main__':
