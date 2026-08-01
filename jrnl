@@ -3,6 +3,7 @@
 import argparse
 import json
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -59,6 +60,48 @@ def embed(text: str, model: str) -> list[float]:
     return response.data[0].embedding
 
 
+def sync() -> None:
+    embeddings_path = JRNL_FOLDER / 'embeddings.json'
+    embeddings = {}
+    if embeddings_path.exists():
+        embeddings = json.loads(embeddings_path.read_text())
+        
+    for path in JRNL_FOLDER.glob('*.json.pending'):
+        j = json.loads(path.read_text())
+        entry = j['entry']
+        if JRNL_DEBUG:
+            print(f'[{path}]')
+            print(j)
+        message = llm(CHUNK_SYSTEM_PROMPT, entry, JRNL_EXTRACTION_MODEL)
+        if not message.content:
+            raise ValueError('llm didnt return message content')
+        if JRNL_DEBUG:
+            if message.reasoning_content:
+                print(message.reasoning_content)
+            print(message.content)
+        match = re.search(r'\[.*\]', message.content.strip(), re.DOTALL)
+        if not match:
+            raise ValueError(f'no json array found in llm message content: {message.content.strip()}')
+        try:
+            chunks = json.loads(match.group(0))
+        except json.JSONDecodeError as e:
+            raise ValueError(f'invalid json parsed: {match.group(0)!r}') from e
+        out = {
+            'entry': entry,
+            'chunks': []
+        }
+        for chunk in chunks:
+            chunk_id = str(max((int(k) for k in embeddings), default=-1) + 1)
+            embeddings[chunk_id] = embed(chunk, JRNL_EMBEDDING_MODEL)
+            out['chunks'].append({
+                'id': chunk_id,
+                'chunk': chunk,
+            })
+        path.with_suffix('').write_text(json.dumps(out, indent=2))
+        path.unlink()
+    embeddings_path.write_text(json.dumps(embeddings, indent=2))
+
+
 def main():
     parser = argparse.ArgumentParser(prog='jrnl')
     sub = parser.add_subparsers(dest='command', title='commands')
@@ -66,6 +109,8 @@ def main():
 
     add_parser = sub.add_parser('add', help='add jrnl entry')
     _ = add_parser.add_argument('entry', help='your jrnl entry')
+
+    sync_parser = sub.add_parser('sync', help='sync jrnl entries')
 
     args = parser.parse_args()
 
@@ -77,6 +122,9 @@ def main():
 
     if args.command == 'add':
         add(args.entry)
+
+    if args.command == 'sync':
+        sync()
 
 
 if __name__ == '__main__':
