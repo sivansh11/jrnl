@@ -5,6 +5,7 @@ import json
 import os
 import re
 import sys
+import subprocess
 from datetime import datetime
 from pathlib import Path
 
@@ -131,6 +132,16 @@ def main():
 
     if args.command == 'add':
         add(args.entry)
+        script = Path(__file__).resolve()
+        cmd = [sys.executable, str(script)]
+        if args.debug:
+            cmd.append('--debug')
+        cmd.append('sync')
+        subprocess.Popen(cmd, 
+                        stdin=subprocess.DEVNULL, 
+                        stdout=subprocess.DEVNULL, 
+                        stderr=subprocess.DEVNULL, 
+                        start_new_session=True)
 
     if args.command == 'sync':
         sync()
