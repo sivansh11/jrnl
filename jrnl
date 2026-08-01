@@ -1,0 +1,27 @@
+#!/bin/python
+
+import argparse
+import os
+from pathlib import Path
+
+
+JRNL_DEBUG = os.environ.get('JRNL_DEBUG', False)
+JRNL_FOLDER = Path(os.environ.get('JRNL_FOLDER', '~/.jrnl')).expanduser()
+
+
+def main():
+    parser = argparse.ArgumentParser(prog='jrnl')
+    sub = parser.add_subparsers(dest='command', title='commands')
+    _ = parser.add_argument('--debug', action='store_true', help='enable debug output')
+
+    args = parser.parse_args()
+
+    JRNL_FOLDER.mkdir(parents=True, exist_ok=True)
+
+    if args.debug:
+        global JRNL_DEBUG
+        JRNL_DEBUG = True
+
+
+if __name__ == '__main__':
+    main()
