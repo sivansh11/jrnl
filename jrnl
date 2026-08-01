@@ -333,6 +333,12 @@ def ask(query: str, threshold: float, top: int) -> None:
                 candidates.append((sim, source, c['id'], c['chunk']))
     candidates.sort(key=lambda x: x[0], reverse=True)
     top_candidates = candidates[:top]
+    top_candidates.sort(
+        key=lambda x: (
+            datetime.datetime.strptime(TIMESTAMP_RE.match(x[1]).group(1), '%d-%m-%Y--%H-%M-%S'),
+            int(x[2]),
+        )
+    )
     if not top_candidates:
         print('no relevant chunks found')
         return
