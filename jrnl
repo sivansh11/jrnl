@@ -20,7 +20,12 @@ JRNL_API_KEY = os.environ.get('JRNL_API_KEY', 'api-key')
 JRNL_EXTRACTION_MODEL = os.environ.get('JRNL_EXTRACTION_MODEL', 'unsloth/gemma-4-E2B-it-qat-GGUF:Q4_K_XL')
 JRNL_CHAT_MODEL = os.environ.get('JRNL_CHAT_MODEL', JRNL_EXTRACTION_MODEL)
 JRNL_EMBEDDING_MODEL = os.environ.get('JRNL_EMBEDDING_MODEL', 'nomic-ai/nomic-embed-text-v1.5-GGUF:Q8_0')
-CHAT_SYSTEM_PROMPT = """You are a helpful assistant with access to the user's personal journal entries. Answer the user's question based only on the provided journal context. Be concise and cite the relevant entries when you use them. The context is a list of journal chunks, each prefixed with its source timestamp in square brackets, like [01-08-2026--04-59-58]. When you use a chunk in your answer, reference its source by listing the timestamp(s), e.g. "Sources: 01-08-2026--04-59-58, 02-08-2026--10-00-00". If no chunk is relevant, say you don't know."""
+CHAT_SYSTEM_PROMPT = """You are a helpful assistant with the access to the user's personal journal entries.
+RULES:
+1) Answer the user's question based only on the provided journal context.
+2) The context is a list of journal chunks, each prefixed with its source timestamp, chunk id, and similarity score in square brackets. For example: [01-08-2026--04-59-58 #3 0.85].
+    While answering using a chunk as a reference, add citations of the source by listing the timestamp and chunk id, for example, [01-08-2026--04-59-58 #3, 02-08-2026--10-00-00 #7].
+3) If no chunk is relevant, or no chunks are provided, say you dont know!."""
 CHUNK_SYSTEM_PROMPT = """You are a text processing engine designed for a memory retrieval system. Your task is to extract "Semantically Atomic" chunks (which can be events, thoughts, emotions, or observations) from raw journal entries.
 CRITICAL DEFINITION - SEMANTIC ATOMICITY:
 A chunk must be the smallest possible unit of information that remains FULLY SELF-CONTAINED.
@@ -194,6 +199,55 @@ def ls(days: int) -> None:
                 print(f"  [{c['id']}] {c['chunk']}")
 
 
+def cosine_similarity(a: list[float], b: list[float]) -> float:
+    dot = sum(x * y for x, y in zip(a, b))
+    mag_a = sum(x * x for x in a) ** 0.5
+    mag_b = sum(y * y for y in b) ** 0.5
+    if mag_a == 0 or mag_b == 0:
+        return 0.0
+    return dot / (mag_a * mag_b)
+
+
+def ask(query: str, threshold: float, top: int) -> None:
+    embeddings_path = JRNL_FOLDER / 'embeddings.json'
+    if not embeddings_path.exists():
+        print('no embeddings found', file=sys.stderr)
+        return
+    embeddings = json.loads(embeddings_path.read_text())
+    query_embedding = embed(query, JRNL_EMBEDDING_MODEL)
+    candidates = []
+    for path in JRNL_FOLDER.glob('*.json'):
+        if path.name.startswith('.'):
+            continue
+        data = json.loads(path.read_text())
+        source = path.stem
+        for c in data.get('chunks', []):
+            vec = embeddings.get(c['id'])
+            if vec is None:
+                continue
+            sim = cosine_similarity(query_embedding, vec)
+            if sim >= threshold:
+                candidates.append((sim, source, c['id'], c['chunk']))
+    candidates.sort(key=lambda x: x[0], reverse=True)
+    top_candidates = candidates[:top]
+    if not top_candidates:
+        print('no relevant chunks found')
+        return
+    context = '\n\n'.join(
+        f"[{source} #{chunk_id} {sim:.3f}] {chunk}"
+        for sim, source, chunk_id, chunk in top_candidates
+    )
+    if JRNL_DEBUG:
+        print(context)
+    prompt = f"Question: {query}\n\nJournal context:\n{context}"
+    message = llm(CHAT_SYSTEM_PROMPT, prompt, JRNL_CHAT_MODEL)
+    if JRNL_DEBUG:
+        if message.reasoning_content:
+            print(message.reasoning_content)
+    if message.content:
+        print(message.content)
+
+
 def main():
     parser = argparse.ArgumentParser(prog='jrnl')
     sub = parser.add_subparsers(dest='command', title='commands')
@@ -206,6 +260,11 @@ def main():
 
     ls_parser = sub.add_parser('ls', help='list entries')
     _ = ls_parser.add_argument('--days', type=int, default=3, help='entries from the last n days')
+
+    ask_parser = sub.add_parser('ask', help='ask a question against your journal')
+    _ = ask_parser.add_argument('query', help='your question')
+    _ = ask_parser.add_argument('--threshold', type=float, default=0.4, help='minimum similarity (default 0.4)')
+    _ = ask_parser.add_argument('--top', type=int, default=5, help='top n chunks (default 5)')
 
     args = parser.parse_args()
 
@@ -234,6 +293,9 @@ def main():
 
     if args.command == 'ls':
         ls(args.days)
+
+    if args.command == 'ask':
+        ask(args.query, args.threshold, args.top)
 
 
 if __name__ == '__main__':
