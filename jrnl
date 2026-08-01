@@ -20,6 +20,8 @@ JRNL_API_KEY = os.environ.get('JRNL_API_KEY', 'api-key')
 JRNL_EXTRACTION_MODEL = os.environ.get('JRNL_EXTRACTION_MODEL', 'unsloth/gemma-4-E2B-it-qat-GGUF:Q4_K_XL')
 JRNL_CHAT_MODEL = os.environ.get('JRNL_CHAT_MODEL', JRNL_EXTRACTION_MODEL)
 JRNL_EMBEDDING_MODEL = os.environ.get('JRNL_EMBEDDING_MODEL', 'nomic-ai/nomic-embed-text-v1.5-GGUF:Q8_0')
+JRNL_EMBEDDING_BASE_URL = os.environ.get('JRNL_EMBEDDING_BASE_URL', JRNL_BASE_URL)
+JRNL_EMBEDDING_API_KEY = os.environ.get('JRNL_EMBEDDING_API_KEY', JRNL_API_KEY)
 CHAT_SYSTEM_PROMPT = """You are a helpful assistant with the access to the user's personal journal entries.
 RULES:
 1) Answer the user's question based only on the provided journal context.
@@ -41,6 +43,7 @@ EXTRA_BODY = {
 TIMESTAMP_RE = re.compile(r'(\d{2}-\d{2}-\d{4}--\d{2}-\d{2}-\d{2})')
 
 _client: openai.OpenAI | None = None
+_embedding_client: openai.OpenAI | None = None
 
 
 def get_client() -> openai.OpenAI:
@@ -48,6 +51,13 @@ def get_client() -> openai.OpenAI:
     if _client is None:
         _client = openai.OpenAI(base_url=JRNL_BASE_URL, api_key=JRNL_API_KEY)
     return _client
+
+
+def get_embedding_client() -> openai.OpenAI:
+    global _embedding_client
+    if _embedding_client is None:
+        _embedding_client = openai.OpenAI(base_url=JRNL_EMBEDDING_BASE_URL, api_key=JRNL_EMBEDDING_API_KEY)
+    return _embedding_client
 
 
 def add(entry: str) -> None:
@@ -83,7 +93,7 @@ def llm(system_prompt: str, prompt: str, model: str) -> openai.ChatCompletionMes
 
 def embed(text: str, model: str) -> list[float]:
     try:
-        response = get_client().embeddings.create(model=model, input=text)
+        response = get_embedding_client().embeddings.create(model=model, input=text)
     except openai.APIConnectionError as e:
         print(f'couldnt connect aborting: {e}', file=sys.stderr)
         sys.exit(1)
