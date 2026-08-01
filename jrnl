@@ -6,9 +6,27 @@ import os
 from datetime import datetime
 from pathlib import Path
 
+import openai
 
 JRNL_DEBUG = os.environ.get('JRNL_DEBUG', False)
 JRNL_FOLDER = Path(os.environ.get('JRNL_FOLDER', '~/.jrnl')).expanduser()
+JRNL_BASE_URL = os.environ.get('JRNL_BASE_URL', 'http://localhost:8080/v1')
+JRNL_API_KEY = os.environ.get('JRNL_API_KEY', "api-key")
+JRNL_EXTRACTION_MODEL = os.environ.get('JRNL_EXTRACTION_MODEL',  'unsloth/gemma-4-E2B-it-qat-GGUF:Q4_K_XL')
+JRNL_CHAT_MODEL = os.environ.get('JRNL_CHAT_MODEL',  JRNL_EXTRACTION_MODEL)
+JRNL_EMBEDDING_MODEL = os.environ.get('JRNL_EMBEDDING_MODEL',  'nomic-ai/nomic-embed-text-v1.5-GGUF:Q8_0')
+CHAT_SYSTEM_PROMPT = """You are a helpful assistant with access to the user's personal journal entries. Answer the user's question based only on the provided journal context. Be concise and cite the relevant entries when you use them. The context is a list of journal chunks, each prefixed with its source timestamp in square brackets, like [01-08-2026--04-59-58]. When you use a chunk in your answer, reference its source by listing the timestamp(s), e.g. "Sources: 01-08-2026--04-59-58, 02-08-2026--10-00-00". If no chunk is relevant, say you don't know."""
+CHUNK_SYSTEM_PROMPT = """You are a text processing engine designed for a memory retrieval system. Your task is to extract "Semantically Atomic" chunks (which can be events, thoughts, emotions, or observations) from raw journal entries.
+CRITICAL DEFINITION - SEMANTIC ATOMICITY:
+A chunk must be the smallest possible unit of information that remains FULLY SELF-CONTAINED.
+TRANSFORMATION RULES:
+1. SPLIT ON SHIFTS (Highest Priority): Create a new chunk if the user changes physical locations, distinct time blocks, or abruptly changes topics/train of thought.
+2. MERGE TIGHTLY BOUND IDEAS/ACTIONS: Only merge actions or sentences if they describe the exact same continuous event or belong to the exact same continuous thought.
+3. PRESERVE INTERNAL STATE: Emotions, opinions, and philosophical statements (e.g., "I hate that things don't work") are highly valuable. NEVER treat them as empty/junk inputs.
+4. OUTPUT FORMAT: Keep your internal reasoning extremely brief (1-2 short sentences max). Output a single JSON array of strings. Return [] ONLY if the input is absolute unreadable gibberish."""
+EXTRA_BODY={
+    'enable_thinking': True
+}
 
 
 def add(entry: str) -> None:
@@ -21,6 +39,24 @@ def add(entry: str) -> None:
     if JRNL_DEBUG:
         print(f'[{name}]')
         print(j)
+
+
+def llm(system_prompt: str, prompt: str, model: str) -> openai.ChatCompletionMessage:
+    client = openai.OpenAI(base_url=JRNL_BASE_URL, api_key=JRNL_API_KEY)
+    messages: list[openai.ChatCompletionMessageParam] = [{'role': 'system', 'content': system_prompt}]
+    messages.append({'role': 'user', 'content': prompt})
+    response = client.chat.completions.create(
+        model = model,
+        messages=messages,
+        extra_body=EXTRA_BODY
+    )
+    return response.choices[0].message
+
+
+def embed(text: str, model: str) -> list[float]:  
+    client = openai.OpenAI(base_url=JRNL_BASE_URL, api_key=JRNL_API_KEY)
+    response = client.embeddings.create(model=model, input=text)
+    return response.data[0].embedding
 
 
 def main():
