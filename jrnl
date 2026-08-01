@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import re
+import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -46,17 +47,25 @@ def llm(system_prompt: str, prompt: str, model: str) -> openai.ChatCompletionMes
     client = openai.OpenAI(base_url=JRNL_BASE_URL, api_key=JRNL_API_KEY)
     messages: list[openai.ChatCompletionMessageParam] = [{'role': 'system', 'content': system_prompt}]
     messages.append({'role': 'user', 'content': prompt})
-    response = client.chat.completions.create(
-        model = model,
-        messages=messages,
-        extra_body=EXTRA_BODY
-    )
+    try:
+        response = client.chat.completions.create(
+            model = model,
+            messages=messages,
+            extra_body=EXTRA_BODY
+        )
+    except openai.APIConnectionError as e:
+        print(f'couldnt connect aborting: {e}', file=sys.stderr)
+        sys.exit(1)
     return response.choices[0].message
 
 
 def embed(text: str, model: str) -> list[float]:  
     client = openai.OpenAI(base_url=JRNL_BASE_URL, api_key=JRNL_API_KEY)
-    response = client.embeddings.create(model=model, input=text)
+    try:
+        response = client.embeddings.create(model=model, input=text)
+    except openai.APIConnectionError as e:
+        print(f'couldnt connect aborting: {e}', file=sys.stderr)
+        sys.exit(1)
     return response.data[0].embedding
 
 
