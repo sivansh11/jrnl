@@ -342,7 +342,7 @@ def ask(query: str, threshold: float, top: int) -> None:
     )
     if JRNL_DEBUG:
         print(context)
-    prompt = f"Question: {query}\n\nJournal context:\n{context}"
+    prompt = f"Current time: {datetime.datetime.now().strftime('%d-%m-%Y--%H-%M-%S')}\nQuestion: {query}\n\nJournal context:\n{context}"
     message = llm(CHAT_SYSTEM_PROMPT, prompt, JRNL_CHAT_MODEL)
     if JRNL_DEBUG:
         reasoning = get_reasoning(message)
