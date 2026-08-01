@@ -359,6 +359,31 @@ def ask(query: str, threshold: float, top: int) -> None:
         print(message.content)
 
 
+def edit_entry() -> None:
+    editor = os.environ.get('EDITOR')
+    if not editor:
+        print('please set the $EDITOR environment variable, or use `jrnl add` directly', file=sys.stderr)
+        sys.exit(1)
+    fd, tmp = tempfile.mkstemp(prefix='jrnl-', suffix='.md')
+    try:
+        with os.fdopen(fd, 'w'):
+            pass
+        result = subprocess.run(f'{editor} {tmp}', shell=True)
+        if result.returncode != 0:
+            print(f'editor exited with status {result.returncode}', file=sys.stderr)
+            sys.exit(result.returncode)
+        entry = Path(tmp).read_text()
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+    if not entry.strip():
+        print('empty entry, not saved', file=sys.stderr)
+        return
+    add(entry)
+
+
 def main():
     parser = argparse.ArgumentParser(prog='jrnl')
     sub = parser.add_subparsers(dest='command', title='commands')
@@ -386,6 +411,9 @@ def main():
     if args.debug:
         global JRNL_DEBUG
         JRNL_DEBUG = True
+
+    if args.command is None:
+        edit_entry()
 
     if args.command == 'add':
         add(args.entry)
