@@ -1,7 +1,9 @@
 #!/bin/python
 
 import argparse
+import json
 import os
+from datetime import datetime
 from pathlib import Path
 
 
@@ -9,10 +11,25 @@ JRNL_DEBUG = os.environ.get('JRNL_DEBUG', False)
 JRNL_FOLDER = Path(os.environ.get('JRNL_FOLDER', '~/.jrnl')).expanduser()
 
 
+def add(entry: str) -> None:
+    j = {
+        'entry': entry,
+    }
+    name = datetime.now().strftime('%d-%m-%Y--%H-%M-%S') + '.json.pending'
+    with open(JRNL_FOLDER / name, 'w') as f:
+        json.dump(j, f, indent=2)
+    if JRNL_DEBUG:
+        print(f'[{name}]')
+        print(j)
+
+
 def main():
     parser = argparse.ArgumentParser(prog='jrnl')
     sub = parser.add_subparsers(dest='command', title='commands')
     _ = parser.add_argument('--debug', action='store_true', help='enable debug output')
+
+    add_parser = sub.add_parser('add', help='add jrnl entry')
+    _ = add_parser.add_argument('entry', help='your jrnl entry')
 
     args = parser.parse_args()
 
@@ -21,6 +38,9 @@ def main():
     if args.debug:
         global JRNL_DEBUG
         JRNL_DEBUG = True
+
+    if args.command == 'add':
+        add(args.entry)
 
 
 if __name__ == '__main__':
