@@ -1,11 +1,13 @@
 #!/bin/python
 
 import argparse
+import fcntl
 import json
 import os
 import re
 import sys
 import subprocess
+import tempfile
 import datetime
 from pathlib import Path
 
@@ -70,46 +72,68 @@ def embed(text: str, model: str) -> list[float]:
     return response.data[0].embedding
 
 
-def sync() -> None:
-    embeddings_path = JRNL_FOLDER / 'embeddings.json'
-    embeddings = {}
-    if embeddings_path.exists():
-        embeddings = json.loads(embeddings_path.read_text())
-        
-    for path in JRNL_FOLDER.glob('*.json.pending'):
-        j = json.loads(path.read_text())
-        entry = j['entry']
-        if JRNL_DEBUG:
-            print(f'[{path}]')
-            print(j)
-        message = llm(CHUNK_SYSTEM_PROMPT, entry, JRNL_EXTRACTION_MODEL)
-        if not message.content:
-            raise ValueError('llm didnt return message content')
-        if JRNL_DEBUG:
-            if message.reasoning_content:
-                print(message.reasoning_content)
-            print(message.content)
-        match = re.search(r'\[.*\]', message.content.strip(), re.DOTALL)
-        if not match:
-            raise ValueError(f'no json array found in llm message content: {message.content.strip()}')
+def write_json_atomic(path: Path, data) -> None:
+    fd, tmp = tempfile.mkstemp(dir=JRNL_FOLDER, prefix='.tmp-', suffix='.json')
+    try:
+        with os.fdopen(fd, 'w') as f:
+            json.dump(data, f, indent=2)
+        os.replace(tmp, path)
+    except BaseException:
         try:
-            chunks = json.loads(match.group(0))
-        except json.JSONDecodeError as e:
-            raise ValueError(f'invalid json parsed: {match.group(0)!r}') from e
-        out = {
-            'entry': entry,
-            'chunks': []
-        }
-        for chunk in chunks:
-            chunk_id = str(max((int(k) for k in embeddings), default=-1) + 1)
-            embeddings[chunk_id] = embed(chunk, JRNL_EMBEDDING_MODEL)
-            out['chunks'].append({
-                'id': chunk_id,
-                'chunk': chunk,
-            })
-        path.with_suffix('').write_text(json.dumps(out, indent=2))
-        path.unlink()
-    embeddings_path.write_text(json.dumps(embeddings, indent=2))
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def sync() -> None:
+    with open(JRNL_FOLDER / '.sync.lock', 'w') as lock_file:
+        try:
+            fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            print('sync already running, exiting', file=sys.stderr)
+            return
+        embeddings_path = JRNL_FOLDER / 'embeddings.json'
+        embeddings = {}
+        if embeddings_path.exists():
+            embeddings = json.loads(embeddings_path.read_text())
+        
+        for path in JRNL_FOLDER.glob('*.json.pending'):
+            j = json.loads(path.read_text())
+            entry = j['entry']
+            if JRNL_DEBUG:
+                print(f'[{path}]')
+                print(j)
+            message = llm(CHUNK_SYSTEM_PROMPT, entry, JRNL_EXTRACTION_MODEL)
+            if not message.content:
+                raise ValueError('llm didnt return message content')
+            if JRNL_DEBUG:
+                if message.reasoning_content:
+                    print(message.reasoning_content)
+                print(message.content)
+            match = re.search(r'\[.*\]', message.content.strip(), re.DOTALL)
+            if not match:
+                raise ValueError(f'no json array found in llm message content: {message.content.strip()}')
+            try:
+                chunks = json.loads(match.group(0))
+            except json.JSONDecodeError as e:
+                raise ValueError(f'invalid json parsed: {match.group(0)!r}') from e
+            out = {
+                'entry': entry,
+                'chunks': []
+            }
+            next_id = max((int(k) for k in embeddings), default=-1) + 1
+            for chunk in chunks:
+                chunk_id = str(next_id)
+                next_id += 1
+                embeddings[chunk_id] = embed(chunk, JRNL_EMBEDDING_MODEL)
+                out['chunks'].append({
+                    'id': chunk_id,
+                    'chunk': chunk,
+                })
+            write_json_atomic(embeddings_path, embeddings)
+            write_json_atomic(path.with_suffix(''), out)
+            path.unlink()
 
 
 def ls(days: int) -> None:
@@ -118,6 +142,8 @@ def ls(days: int) -> None:
     entries = []
     for path in JRNL_FOLDER.glob('*.json*'):
         if path.stem == 'embeddings':
+            continue
+        if path.name == '.sync.lock':
             continue
         pending = path.name.endswith('.pending')
         name = path.name.removesuffix('.pending').removesuffix('.json')
