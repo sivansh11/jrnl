@@ -204,6 +204,31 @@ def sync() -> None:
                 print(f'[sync] done {path.name}')
 
 
+def reembed() -> None:
+    with open(JRNL_FOLDER / '.sync.lock', 'w') as lock_file:
+        try:
+            fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            print('sync already running, exiting', file=sys.stderr)
+            return
+
+        embeddings = {}
+        count = 0
+        for path in sorted(JRNL_FOLDER.glob('*.json')):
+            if path.name.startswith('.'):
+                continue
+            data = json.loads(path.read_text())
+            for c in data.get('chunks', []):
+                embeddings[c['id']] = embed(f"search_document: {c['chunk']}", JRNL_EMBEDDING_MODEL)
+                count += 1
+            if JRNL_DEBUG:
+                print(f'[reembed] {path.name}')
+        write_json_atomic(JRNL_FOLDER / 'embeddings.json', embeddings)
+        if embeddings:
+            save_embedding_config(JRNL_EMBEDDING_MODEL, len(next(iter(embeddings.values()))))
+        print(f'[reembed] done {count} chunks')
+
+
 def ls(days: int) -> None:
     now = datetime.datetime.now()
     end = now - datetime.timedelta(days=days)
@@ -314,6 +339,8 @@ def main():
     _ = ask_parser.add_argument('--threshold', type=float, default=0.4, help='minimum similarity (default 0.4)')
     _ = ask_parser.add_argument('--top', type=int, default=5, help='top n chunks (default 5)')
 
+    reembed_parser = sub.add_parser('reembed', help='reembed all chunks with the current embedding model')
+
     args = parser.parse_args()
 
     JRNL_FOLDER.mkdir(parents=True, exist_ok=True)
@@ -344,6 +371,9 @@ def main():
 
     if args.command == 'ask':
         ask(args.query, args.threshold, args.top)
+
+    if args.command == 'reembed':
+        reembed()
 
 
 if __name__ == '__main__':
