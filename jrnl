@@ -382,17 +382,6 @@ def main():
 
     if args.command == 'add':
         add(args.entry)
-        script = Path(__file__).resolve()
-        cmd = [sys.executable, str(script)]
-        if args.debug:
-            cmd.append('--debug')
-        cmd.append('sync')
-        with open(JRNL_FOLDER / '.sync.log', 'a') as logf:
-            subprocess.Popen(cmd,
-                             stdin=subprocess.DEVNULL,
-                             stdout=logf,
-                             stderr=logf,
-                             start_new_session=True)
 
     if args.command == 'sync':
         sync()
