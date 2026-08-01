@@ -66,3 +66,4 @@ Re-embeds every chunk with the current embedding model and updates `in-use.confi
 | `JRNL_EMBEDDING_MODEL` | Model used to generate embeddings for chunks and queries | `nomic-ai/nomic-embed-text-v1.5-GGUF:Q8_0` |
 | `JRNL_EMBEDDING_BASE_URL` | Base URL of the embedding API server; must stay constant to keep embeddings comparable | `JRNL_BASE_URL` |
 | `JRNL_EMBEDDING_API_KEY` | API key used to authenticate with the embedding server | `JRNL_API_KEY` |
+| `JRNL_EXTRA_BODY` | Extra JSON body sent with chat completions, e.g. `{"reasoning": {"enabled": true, "effort": "medium"}}` for OpenRouter | `{"enable_thinking": true}` |

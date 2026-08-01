@@ -61,6 +61,17 @@ def get_embedding_client() -> openai.OpenAI:
     return _embedding_client
 
 
+def get_extra_body() -> dict:
+    raw = os.environ.get('JRNL_EXTRA_BODY', '')
+    if raw:
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError as e:
+            print(f'invalid JRNL_EXTRA_BODY json: {e}', file=sys.stderr)
+            sys.exit(1)
+    return EXTRA_BODY
+
+
 def add(entry: str) -> None:
     j = {'entry': entry}
     base = datetime.datetime.now().strftime('%d-%m-%Y--%H-%M-%S')
@@ -84,7 +95,7 @@ def llm(system_prompt: str, prompt: str, model: str) -> openai.ChatCompletionMes
         response = get_client().chat.completions.create(
             model=model,
             messages=messages,
-            extra_body=EXTRA_BODY,
+            extra_body=get_extra_body(),
         )
     except openai.APIConnectionError as e:
         print(f'couldnt connect aborting: {e}', file=sys.stderr)
