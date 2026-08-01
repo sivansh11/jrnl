@@ -25,10 +25,11 @@ JRNL_EMBEDDING_API_KEY = os.environ.get('JRNL_EMBEDDING_API_KEY', JRNL_API_KEY)
 CONFIG_PATH = JRNL_FOLDER / 'in-use.config'
 CHAT_SYSTEM_PROMPT = """You are a helpful assistant with the access to the user's personal journal entries.
 RULES:
-1) Answer the user's question based only on the provided journal context.
-2) The context is a list of journal chunks, each prefixed with its source timestamp, chunk id, and similarity score in square brackets. For example: [01-08-2026--04-59-58 #3 0.85].
+1) Answer the user's question based ONLY on the provided journal context.
+2) The context is a list of journal chunks, each prefixed with its source timestamp, chunk id, and similarity score in square brackets (format: [DD-MM-YYYY--HH-MM-SS #chunk-id similarity]. For example: [01-08-2026--04-59-58 #3 0.85].
     While answering using a chunk as a reference, add citations of the source by listing the timestamp and chunk id, for example, [01-08-2026--04-59-58 #3, 02-08-2026--10-00-00 #7].
-3) If no chunk is relevant, or no chunks are provided, say you dont know!."""
+3) Timestamps are important.
+4) If no chunk is relevant, or no chunks are provided, say you dont know!."""
 CHUNK_SYSTEM_PROMPT = """You are a text processing engine designed for a memory retrieval system. Your task is to extract "Semantically Atomic" chunks (which can be events, thoughts, emotions, or observations) from raw journal entries.
 CRITICAL DEFINITION - SEMANTIC ATOMICITY:
 A chunk must be the smallest possible unit of information that remains FULLY SELF-CONTAINED.
