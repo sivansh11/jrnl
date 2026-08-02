@@ -2,6 +2,21 @@
 
 An offline-first AI journaling tool. All data lives on your machine in `~/.jrnl`.
 
+## Install
+Install to `~/.local` with the one-liner:
+```sh
+curl -fsSL https://raw.githubusercontent.com/sivansh11/jrnl/main/install.sh | bash
+```
+Or with wget:
+```sh
+wget -qO- https://raw.githubusercontent.com/sivansh11/jrnl/main/install.sh | bash
+```
+The installer downloads `jrnl`, creates a virtualenv, and installs the dependencies. Re-running it updates `jrnl` to the latest version. To uninstall:
+```sh
+bash install.sh --uninstall
+```
+Uninstalling removes jrnl and its virtualenv but leaves your journal data in `~/.jrnl` untouched. If `jrnl` isn't found after installing, add `~/.local/bin` to your `PATH`.
+
 ## Usage
 
 ```
