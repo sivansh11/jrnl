@@ -26,7 +26,7 @@ CONFIG_PATH = JRNL_FOLDER / 'in-use.config'
 CHAT_SYSTEM_PROMPT = """You are a helpful assistant with the access to the user's personal journal entries.
 RULES:
 1) Answer the user's question based ONLY on the provided journal context.
-2) The context is a list of journal chunks, each prefixed with its source timestamp, chunk id, and similarity score in square brackets (format: [DD-MM-YYYY--HH-MM-SS #chunk-id similarity]. For example: [01-08-2026--04-59-58 #3 0.85].
+2) The context is a list of journal chunks, each prefixed with its source timestamp and chunk id in square brackets (format: [DD-MM-YYYY--HH-MM-SS #chunk-id]). For example: [01-08-2026--04-59-58 #3].
     While answering using a chunk as a reference, add citations of the source by listing the timestamp and chunk id, for example, [01-08-2026--04-59-58 #3, 02-08-2026--10-00-00 #7].
 3) Timestamps are important.
 4) If no chunk is relevant, or no chunks are provided, say you dont know!."""
@@ -52,7 +52,7 @@ TOOLS = [
         'type': 'function',
         'function': {
             'name': 'journal_search',
-            'description': 'Semantic search over journal chunks using cosine similarity. Returns the most relevant chunks from the journal along with their similarity scores.',
+            'description': 'Semantic search over journal chunks using cosine similarity. Returns the most relevant chunks from the journal.',
             'parameters': {
                 'type': 'object',
                 'properties': {
@@ -453,7 +453,7 @@ def dispatch_tool(name: str, args: dict) -> list[str] | dict:
             results = search_chunks(args.get('query', ''), args.get('threshold', 0.4), args.get('top', 5))
         except ValueError as e:
             return {'error': str(e)}
-        return [f'[{source} #{chunk_id} {sim:.3f}] {chunk}' for sim, source, chunk_id, chunk in results]
+        return [f'[{source} #{chunk_id}] {chunk}' for sim, source, chunk_id, chunk in results]
     if name == 'journal_get_entries':
         try:
             results = get_chunks_in_range(args.get('from_date', ''), args.get('to_date', ''))
@@ -474,7 +474,7 @@ def ask(query: str, threshold: float, top: int, use_tools: bool = True) -> None:
             print('no relevant chunks found')
             return
         context = '\n\n'.join(
-            f"[{source} #{chunk_id} {sim:.3f}] {chunk}"
+            f"[{source} #{chunk_id}] {chunk}"
             for sim, source, chunk_id, chunk in top_candidates
         )
         prompt = f"Current time: {datetime.datetime.now().strftime('%d-%m-%Y--%H-%M-%S')}\nQuestion: {query}\n\nJournal context:\n{context}"
