@@ -26,12 +26,12 @@ CONFIG_PATH = JRNL_FOLDER / 'in-use.config'
 CHAT_SYSTEM_PROMPT = """You are a helpful assistant with the access to the user's personal journal entries.
 RULES:
 1) Answer the user's question based ONLY on the provided journal context.
-2) The context is a list of journal chunks, each prefixed with its source timestamp and chunk id in square brackets (format: [DD-MM-YYYY--HH-MM-SS #chunk-id]). For example: [01-08-2026--04-59-58 #3].
-    While answering using a chunk as a reference, add citations of the source by listing the timestamp and chunk id, for example, [01-08-2026--04-59-58 #3, 02-08-2026--10-00-00 #7].
+2) Context comes in two kinds: full entries and chunks. An entry is one complete journal write, prefixed with its timestamp in square brackets (format: [DD-MM-YYYY--HH-MM-SS]). A chunk is a fragment of an entry, prefixed with its source timestamp and chunk id (format: [DD-MM-YYYY--HH-MM-SS #chunk-id]). For example: an entry [01-08-2026--04-59-58], a chunk [01-08-2026--04-59-58 #3].
+    While answering using a source as a reference, add citations by listing its timestamp (and chunk id when the source is a chunk), for example, [01-08-2026--04-59-58 #3, 02-08-2026--10-00-00 #7].
 3) Timestamps are important.
-4) If no chunk is relevant, or no chunks are provided, say you dont know!."""
+4) If no source is relevant, or no sources are provided, say you dont know!."""
 CHAT_TOOLS_SYSTEM_PROMPT = CHAT_SYSTEM_PROMPT + """
-5) Always gather context with a tool call before answering. If the user asks about a specific date range, call journal_get_entries; otherwise call journal_search to retrieve the most relevant chunks. Never answer without tool results."""
+5) Always gather context with a tool call before answering. If the user asks about a specific date range, call journal_list_entries, then journal_get_entry for the entries of interest; otherwise call journal_search (optionally restricted to a date range) to retrieve the most relevant chunks. If a search hit needs more context, call journal_get_entry to read the full entry. Never answer without tool results."""
 CHUNK_SYSTEM_PROMPT = """You are a text processing engine designed for a memory retrieval system. Your task is to extract "Semantically Atomic" chunks (which can be events, thoughts, emotions, or observations) from raw journal entries.
 CRITICAL DEFINITION - SEMANTIC ATOMICITY:
 A chunk must be the smallest possible unit of information that remains FULLY SELF-CONTAINED.
@@ -52,13 +52,15 @@ TOOLS = [
         'type': 'function',
         'function': {
             'name': 'journal_search',
-            'description': 'Semantic search over journal chunks using cosine similarity. Returns the most relevant chunks from the journal.',
+            'description': 'Semantic search over journal chunks using cosine similarity. Returns the most relevant chunks from the journal, each prefixed with [timestamp #chunk-id]. Optionally restrict the search to an inclusive date range.',
             'parameters': {
                 'type': 'object',
                 'properties': {
                     'query': {'type': 'string', 'description': 'the semantic query to search for'},
                     'threshold': {'type': 'number', 'description': 'minimum similarity score (default 0.4)'},
                     'top': {'type': 'integer', 'description': 'number of top chunks to return (default 5)'},
+                    'from_date': {'type': 'string', 'description': 'start date, DD-MM-YYYY, inclusive'},
+                    'to_date': {'type': 'string', 'description': 'end date, DD-MM-YYYY, inclusive'},
                 },
                 'required': ['query'],
             },
@@ -67,8 +69,22 @@ TOOLS = [
     {
         'type': 'function',
         'function': {
-            'name': 'journal_get_entries',
-            'description': 'Retrieve all chunks from journal entries within an inclusive date range. Use dates in the format DD-MM-YYYY.',
+            'name': 'journal_get_entry',
+            'description': 'Retrieve the full journal entry for an exact timestamp (format DD-MM-YYYY--HH-MM-SS). Returns the entry text and its chunks. Use journal_list_entries or journal_search to find timestamps first.',
+            'parameters': {
+                'type': 'object',
+                'properties': {
+                    'timestamp': {'type': 'string', 'description': 'exact timestamp of the entry, DD-MM-YYYY--HH-MM-SS'},
+                },
+                'required': ['timestamp'],
+            },
+        },
+    },
+    {
+        'type': 'function',
+        'function': {
+            'name': 'journal_list_entries',
+            'description': 'List the timestamps of all journal entries within an inclusive date range. Use dates in the format DD-MM-YYYY. Returns only timestamps; fetch full entries with journal_get_entry.',
             'parameters': {
                 'type': 'object',
                 'properties': {
@@ -375,7 +391,7 @@ def cosine_similarity(a: list[float], b: list[float]) -> float:
     return dot / (mag_a * mag_b)
 
 
-def search_chunks(query: str, threshold: float, top: int) -> list[tuple[float, str, str, str]]:
+def search_chunks(query: str, threshold: float, top: int, from_date: str | None = None, to_date: str | None = None) -> list[tuple[float, str, str, str]]:
     embeddings_path = JRNL_FOLDER / 'embeddings.json'
     if not embeddings_path.exists():
         raise ValueError('no embeddings found')
@@ -389,10 +405,20 @@ def search_chunks(query: str, threshold: float, top: int) -> list[tuple[float, s
     query_embedding = embed(f"search_query: {query}", JRNL_EMBEDDING_MODEL)
     if len(query_embedding) != stored_dim:
         raise ValueError(f'embedding dimension changed from {stored_dim} to {len(query_embedding)}; run jrnl reembed')
+    start = end = None
+    if from_date is not None or to_date is not None:
+        start, end = parse_date_range(from_date or to_date, to_date or from_date)
     candidates = []
     for path in JRNL_FOLDER.glob('*.json'):
         if path.name.startswith('.'):
             continue
+        match = TIMESTAMP_RE.match(path.name.removesuffix('.json'))
+        if not match:
+            continue
+        if start is not None:
+            dt = datetime.datetime.strptime(match.group(1), '%d-%m-%Y--%H-%M-%S').date()
+            if not (start <= dt <= end):
+                continue
         data = json.loads(path.read_text())
         source = path.stem
         for c in data.get('chunks', []):
@@ -413,7 +439,7 @@ def search_chunks(query: str, threshold: float, top: int) -> list[tuple[float, s
     return top_candidates
 
 
-def get_chunks_in_range(from_date: str, to_date: str) -> list[tuple[str, str, str]]:
+def parse_date_range(from_date: str, to_date: str) -> tuple[datetime.date, datetime.date]:
     try:
         start = datetime.datetime.strptime(from_date, '%d-%m-%Y').date()
         end = datetime.datetime.strptime(to_date, '%d-%m-%Y').date()
@@ -423,43 +449,71 @@ def get_chunks_in_range(from_date: str, to_date: str) -> list[tuple[str, str, st
         raise ValueError(f'from_date {from_date} is after to_date {to_date}')
     if JRNL_DEBUG:
         print(f'[range] {start.strftime("%d-%m-%Y")} to {end.strftime("%d-%m-%Y")}')
-    chunks = []
-    for path in JRNL_FOLDER.glob('*.json'):
+    return start, end
+
+
+def get_entry(timestamp: str) -> dict:
+    try:
+        datetime.datetime.strptime(timestamp, '%d-%m-%Y--%H-%M-%S')
+    except ValueError as e:
+        raise ValueError(f'invalid timestamp (expected DD-MM-YYYY--HH-MM-SS): {timestamp}') from e
+    for path in JRNL_FOLDER.glob('*.json*'):
         if path.name.startswith('.'):
             continue
-        name = path.name.removesuffix('.json')
+        name = path.name.removesuffix('.pending').removesuffix('.json')
+        match = TIMESTAMP_RE.match(name)
+        if match and match.group(1) == timestamp:
+            data = json.loads(path.read_text())
+            return {
+                'timestamp': timestamp,
+                'entry': data['entry'],
+                'chunks': [{'id': c['id'], 'chunk': c['chunk']} for c in data.get('chunks', [])],
+            }
+    raise ValueError(f'no entry with timestamp {timestamp}; use journal_list_entries to list entries')
+
+
+def list_entries(from_date: str, to_date: str) -> list[str]:
+    start, end = parse_date_range(from_date, to_date)
+    entries = []
+    for path in JRNL_FOLDER.glob('*.json*'):
+        if path.name.startswith('.'):
+            continue
+        pending = path.name.endswith('.pending')
+        name = path.name.removesuffix('.pending').removesuffix('.json')
         match = TIMESTAMP_RE.match(name)
         if not match:
             continue
         dt = datetime.datetime.strptime(match.group(1), '%d-%m-%Y--%H-%M-%S')
         if not (start <= dt.date() <= end):
             continue
-        data = json.loads(path.read_text())
-        source = path.stem
-        for c in data.get('chunks', []):
-            chunks.append((source, c['id'], c['chunk']))
-    chunks.sort(
-        key=lambda x: (
-            datetime.datetime.strptime(TIMESTAMP_RE.match(x[0]).group(1), '%d-%m-%Y--%H-%M-%S'),
-            int(x[1]),
-        )
-    )
-    return chunks
+        entries.append((dt, match.group(1), pending))
+    entries.sort(key=lambda x: x[0])
+    return [f'[{ts}]' if not pending else f'[{ts}] (pending)' for _, ts, pending in entries]
 
 
 def dispatch_tool(name: str, args: dict) -> list[str] | dict:
     if name == 'journal_search':
         try:
-            results = search_chunks(args.get('query', ''), args.get('threshold', 0.4), args.get('top', 5))
+            results = search_chunks(
+                args.get('query', ''),
+                args.get('threshold', 0.4),
+                args.get('top', 5),
+                args.get('from_date'),
+                args.get('to_date'),
+            )
         except ValueError as e:
             return {'error': str(e)}
         return [f'[{source} #{chunk_id}] {chunk}' for sim, source, chunk_id, chunk in results]
-    if name == 'journal_get_entries':
+    if name == 'journal_get_entry':
         try:
-            results = get_chunks_in_range(args.get('from_date', ''), args.get('to_date', ''))
+            return get_entry(args.get('timestamp', ''))
         except ValueError as e:
             return {'error': str(e)}
-        return [f'[{source} #{chunk_id}] {chunk}' for source, chunk_id, chunk in results]
+    if name == 'journal_list_entries':
+        try:
+            return list_entries(args.get('from_date', ''), args.get('to_date', ''))
+        except ValueError as e:
+            return {'error': str(e)}
     return {'error': f'unknown tool: {name}'}
 
 
