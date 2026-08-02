@@ -30,6 +30,8 @@ RULES:
     While answering using a chunk as a reference, add citations of the source by listing the timestamp and chunk id, for example, [01-08-2026--04-59-58 #3, 02-08-2026--10-00-00 #7].
 3) Timestamps are important.
 4) If no chunk is relevant, or no chunks are provided, say you dont know!."""
+CHAT_TOOLS_SYSTEM_PROMPT = CHAT_SYSTEM_PROMPT + """
+5) Always gather context with a tool call before answering. If the user asks about a specific date range, call journal_get_entries; otherwise call journal_search to retrieve the most relevant chunks. Never answer without tool results."""
 CHUNK_SYSTEM_PROMPT = """You are a text processing engine designed for a memory retrieval system. Your task is to extract "Semantically Atomic" chunks (which can be events, thoughts, emotions, or observations) from raw journal entries.
 CRITICAL DEFINITION - SEMANTIC ATOMICITY:
 A chunk must be the smallest possible unit of information that remains FULLY SELF-CONTAINED.
@@ -43,6 +45,41 @@ EXTRA_BODY = {
 }
 
 TIMESTAMP_RE = re.compile(r'(\d{2}-\d{2}-\d{4}--\d{2}-\d{2}-\d{2})')
+MAX_TOOL_ITERS = 6
+
+TOOLS = [
+    {
+        'type': 'function',
+        'function': {
+            'name': 'journal_search',
+            'description': 'Semantic search over journal chunks using cosine similarity. Returns the most relevant chunks from the journal along with their similarity scores.',
+            'parameters': {
+                'type': 'object',
+                'properties': {
+                    'query': {'type': 'string', 'description': 'the semantic query to search for'},
+                    'threshold': {'type': 'number', 'description': 'minimum similarity score (default 0.4)'},
+                    'top': {'type': 'integer', 'description': 'number of top chunks to return (default 5)'},
+                },
+                'required': ['query'],
+            },
+        },
+    },
+    {
+        'type': 'function',
+        'function': {
+            'name': 'journal_get_entries',
+            'description': 'Retrieve all chunks from journal entries within an inclusive date range. Use dates in the format DD-MM-YYYY.',
+            'parameters': {
+                'type': 'object',
+                'properties': {
+                    'from_date': {'type': 'string', 'description': 'start date, DD-MM-YYYY, inclusive'},
+                    'to_date': {'type': 'string', 'description': 'end date, DD-MM-YYYY, inclusive'},
+                },
+                'required': ['from_date', 'to_date'],
+            },
+        },
+    },
+]
 
 _client: openai.OpenAI | None = None
 _embedding_client: openai.OpenAI | None = None
@@ -92,24 +129,34 @@ def paint(text: str, color: str) -> str:
     return f'\x1b[{codes[color]}m{text}\x1b[0m'
 
 
-def llm(system_prompt: str, prompt: str, model: str) -> str:
-    messages: list[openai.ChatCompletionMessageParam] = [
-        {'role': 'system', 'content': system_prompt},
-        {'role': 'user', 'content': prompt},
-    ]
+def llm(messages: list[openai.ChatCompletionMessageParam], model: str, tools: list | None = None) -> tuple[str, list | None]:
+    kwargs = {}
+    if tools:
+        kwargs['tools'] = tools
     try:
         response = get_client().chat.completions.create(
             model=model,
             messages=messages,
             extra_body=get_extra_body(),
             stream=JRNL_DEBUG,
+            **kwargs,
         )
     except openai.APIConnectionError as e:
         print(f'couldnt connect aborting: {e}', file=sys.stderr)
         sys.exit(1)
     if not JRNL_DEBUG:
-        return response.choices[0].message.content or ''
+        message = response.choices[0].message
+        tool_calls = getattr(message, 'tool_calls', None)
+        if tool_calls:
+            calls = [
+                {'id': c.id, 'type': 'function', 'function': {'name': c.function.name, 'arguments': c.function.arguments}}
+                for c in tool_calls
+            ]
+        else:
+            calls = None
+        return message.content or '', calls
     content = []
+    tool_calls = []
     is_reasoning = True
     for chunk in response:
         delta = chunk.choices[0].delta
@@ -126,8 +173,26 @@ def llm(system_prompt: str, prompt: str, model: str) -> str:
                 print()
             content.append(c)
             print(paint(c, 'white'), end='', flush=True)
+        tc = getattr(delta, 'tool_calls', None)
+        if tc:
+            for t in tc:
+                idx = getattr(t, 'index', 0)
+                while len(tool_calls) <= idx:
+                    tool_calls.append({'id': '', 'type': 'function', 'function': {'name': '', 'arguments': ''}})
+                call = tool_calls[idx]
+                if t.id:
+                    call['id'] += t.id
+                if t.function:
+                    if t.function.name:
+                        call['function']['name'] += t.function.name
+                    if t.function.arguments:
+                        call['function']['arguments'] += t.function.arguments
     print()
-    return ''.join(content)
+    if tool_calls:
+        for call in tool_calls:
+            print(f"{call['function']['name']}({call['function']['arguments']})")
+        return ''.join(content), tool_calls
+    return ''.join(content), None
 
 
 def embed(text: str, model: str) -> list[float]:
@@ -188,7 +253,13 @@ def sync_entry(path: Path, embeddings: dict[str, list[float]]) -> None:
     if JRNL_DEBUG:
         print(f'[{path.name}]')
         print(j)
-    content = llm(CHUNK_SYSTEM_PROMPT, entry, JRNL_EXTRACTION_MODEL)
+    content, _ = llm(
+        [
+            {'role': 'system', 'content': CHUNK_SYSTEM_PROMPT},
+            {'role': 'user', 'content': entry},
+        ],
+        JRNL_EXTRACTION_MODEL,
+    )
     if not content:
         raise ValueError('llm didnt return message content')
     chunks = extract_chunks(content)
@@ -304,24 +375,20 @@ def cosine_similarity(a: list[float], b: list[float]) -> float:
     return dot / (mag_a * mag_b)
 
 
-def ask(query: str, threshold: float, top: int) -> None:
+def search_chunks(query: str, threshold: float, top: int) -> list[tuple[float, str, str, str]]:
     embeddings_path = JRNL_FOLDER / 'embeddings.json'
     if not embeddings_path.exists():
-        print('no embeddings found', file=sys.stderr)
-        return
+        raise ValueError('no embeddings found')
     embeddings = json.loads(embeddings_path.read_text())
     config = load_embedding_config()
     if config is None:
-        print('no embeddings config found; run jrnl reembed', file=sys.stderr)
-        sys.exit(1)
+        raise ValueError('no embeddings config found; run jrnl reembed')
     stored_model, stored_dim = config
     if stored_model != JRNL_EMBEDDING_MODEL:
-        print(f'embeddings model changed from {stored_model} to {JRNL_EMBEDDING_MODEL}; run jrnl reembed', file=sys.stderr)
-        sys.exit(1)
+        raise ValueError(f'embeddings model changed from {stored_model} to {JRNL_EMBEDDING_MODEL}; run jrnl reembed')
     query_embedding = embed(f"search_query: {query}", JRNL_EMBEDDING_MODEL)
     if len(query_embedding) != stored_dim:
-        print(f'embedding dimension changed from {stored_dim} to {len(query_embedding)}; run jrnl reembed', file=sys.stderr)
-        sys.exit(1)
+        raise ValueError(f'embedding dimension changed from {stored_dim} to {len(query_embedding)}; run jrnl reembed')
     candidates = []
     for path in JRNL_FOLDER.glob('*.json'):
         if path.name.startswith('.'):
@@ -343,20 +410,120 @@ def ask(query: str, threshold: float, top: int) -> None:
             int(x[2]),
         )
     )
-    if not top_candidates:
-        print('no relevant chunks found')
-        return
-    context = '\n\n'.join(
-        f"[{source} #{chunk_id} {sim:.3f}] {chunk}"
-        for sim, source, chunk_id, chunk in top_candidates
-    )
-    prompt = f"Current time: {datetime.datetime.now().strftime('%d-%m-%Y--%H-%M-%S')}\nQuestion: {query}\n\nJournal context:\n{context}"
+    return top_candidates
+
+
+def get_chunks_in_range(from_date: str, to_date: str) -> list[tuple[str, str, str]]:
+    try:
+        start = datetime.datetime.strptime(from_date, '%d-%m-%Y').date()
+        end = datetime.datetime.strptime(to_date, '%d-%m-%Y').date()
+    except ValueError as e:
+        raise ValueError(f'invalid date (expected DD-MM-YYYY): {e}') from e
+    if start > end:
+        raise ValueError(f'from_date {from_date} is after to_date {to_date}')
     if JRNL_DEBUG:
-        print(paint(prompt, 'white'))
-    content = llm(CHAT_SYSTEM_PROMPT, prompt, JRNL_CHAT_MODEL)
-    # in debug the content is streamed and already printed above
-    if not JRNL_DEBUG and content:
-        print(content)
+        print(f'[range] {start.strftime("%d-%m-%Y")} to {end.strftime("%d-%m-%Y")}')
+    chunks = []
+    for path in JRNL_FOLDER.glob('*.json'):
+        if path.name.startswith('.'):
+            continue
+        name = path.name.removesuffix('.json')
+        match = TIMESTAMP_RE.match(name)
+        if not match:
+            continue
+        dt = datetime.datetime.strptime(match.group(1), '%d-%m-%Y--%H-%M-%S')
+        if not (start <= dt.date() <= end):
+            continue
+        data = json.loads(path.read_text())
+        source = path.stem
+        for c in data.get('chunks', []):
+            chunks.append((source, c['id'], c['chunk']))
+    chunks.sort(
+        key=lambda x: (
+            datetime.datetime.strptime(TIMESTAMP_RE.match(x[0]).group(1), '%d-%m-%Y--%H-%M-%S'),
+            int(x[1]),
+        )
+    )
+    return chunks
+
+
+def dispatch_tool(name: str, args: dict) -> list[str] | dict:
+    if name == 'journal_search':
+        try:
+            results = search_chunks(args.get('query', ''), args.get('threshold', 0.4), args.get('top', 5))
+        except ValueError as e:
+            return {'error': str(e)}
+        return [f'[{source} #{chunk_id} {sim:.3f}] {chunk}' for sim, source, chunk_id, chunk in results]
+    if name == 'journal_get_entries':
+        try:
+            results = get_chunks_in_range(args.get('from_date', ''), args.get('to_date', ''))
+        except ValueError as e:
+            return {'error': str(e)}
+        return [f'[{source} #{chunk_id}] {chunk}' for source, chunk_id, chunk in results]
+    return {'error': f'unknown tool: {name}'}
+
+
+def ask(query: str, threshold: float, top: int, use_tools: bool = True) -> None:
+    if not use_tools:
+        try:
+            top_candidates = search_chunks(query, threshold, top)
+        except ValueError as e:
+            print(e, file=sys.stderr)
+            return
+        if not top_candidates:
+            print('no relevant chunks found')
+            return
+        context = '\n\n'.join(
+            f"[{source} #{chunk_id} {sim:.3f}] {chunk}"
+            for sim, source, chunk_id, chunk in top_candidates
+        )
+        prompt = f"Current time: {datetime.datetime.now().strftime('%d-%m-%Y--%H-%M-%S')}\nQuestion: {query}\n\nJournal context:\n{context}"
+        if JRNL_DEBUG:
+            print(paint(prompt, 'white'))
+        content, _ = llm(
+            [
+                {'role': 'system', 'content': CHAT_SYSTEM_PROMPT},
+                {'role': 'user', 'content': prompt},
+            ],
+            JRNL_CHAT_MODEL,
+        )
+        # in debug the content is streamed and already printed above
+        if not JRNL_DEBUG and content:
+            print(content)
+        return
+
+    user_prompt = f"Current time: {datetime.datetime.now().strftime('%d-%m-%Y--%H-%M-%S')}\nQuestion: {query}"
+    messages: list[openai.ChatCompletionMessageParam] = [
+        {'role': 'system', 'content': CHAT_TOOLS_SYSTEM_PROMPT},
+        {'role': 'user', 'content': user_prompt},
+    ]
+    if JRNL_DEBUG:
+        print(paint(user_prompt, 'white'))
+    for _ in range(MAX_TOOL_ITERS):
+        content, tool_calls = llm(messages, JRNL_CHAT_MODEL, tools=TOOLS)
+        if tool_calls:
+            messages.append(
+                {
+                    'role': 'assistant',
+                    'content': content or None,
+                    'tool_calls': tool_calls,
+                }
+            )
+            for call in tool_calls:
+                try:
+                    args = json.loads(call['function']['arguments'])
+                    result = dispatch_tool(call['function']['name'], args)
+                except json.JSONDecodeError as e:
+                    result = {'error': f'invalid tool arguments json: {e}'}
+                if JRNL_DEBUG:
+                    print(json.dumps(result, indent=2))
+                messages.append({'role': 'tool', 'tool_call_id': call['id'], 'content': json.dumps(result)})
+            continue
+        # in debug the content is streamed and already printed above
+        if not JRNL_DEBUG and content:
+            print(content)
+        return
+    print('reached max tool iterations, stopping', file=sys.stderr)
 
 
 def edit_entry() -> None:
@@ -401,6 +568,7 @@ def main():
     _ = ask_parser.add_argument('query', help='your question')
     _ = ask_parser.add_argument('--threshold', type=float, default=0.4, help='minimum similarity (default 0.4)')
     _ = ask_parser.add_argument('--top', type=int, default=5, help='top n chunks (default 5)')
+    _ = ask_parser.add_argument('--no-tools', action='store_true', help='disable tool calling, use single-shot retrieval (default tools)')
 
     reembed_parser = sub.add_parser('reembed', help='reembed all chunks with the current embedding model')
 
@@ -425,7 +593,7 @@ def main():
         ls(args.days)
 
     if args.command == 'ask':
-        ask(args.query, args.threshold, args.top)
+        ask(args.query, args.threshold, args.top, use_tools=not args.no_tools)
 
     if args.command == 'reembed':
         reembed()

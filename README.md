@@ -43,9 +43,14 @@ Breaks journal entries down into semantically atomic chunks (events, thoughts, e
 
 ### ask
 
-`jrnl ask "query" [--threshold F] [--top N]`
+`jrnl ask "query" [--threshold F] [--top N] [--no-tools]`
 
-Embeds the query and retrieves the most similar chunks from the journal (using cosine similarity against the embedding threshold), then passes them as context to an LLM for an answer.
+By default, `ask` gives the LLM two tools and lets it decide what to fetch:
+
+- `journal_search` — embeds the query and retrieves the most similar chunks from the journal (using cosine similarity against the embedding threshold), then returns them as context.
+- `journal_get_entries` — returns all chunks from entries within an inclusive date range (`DD-MM-YYYY`), e.g. to answer date-specific questions.
+
+The LLM calls the tools iteratively and answers using the retrieved chunks, citing their timestamps and chunk ids. Pass `--no-tools` to disable tool calling and use the old single-shot semantic retrieval. The `--threshold` and `--top` flags set the defaults for `journal_search`.
 
 ### reembed
 
