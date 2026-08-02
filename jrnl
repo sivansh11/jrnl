@@ -31,7 +31,9 @@ RULES:
 3) Timestamps are important.
 4) If no source is relevant, or no sources are provided, say you dont know!."""
 CHAT_TOOLS_SYSTEM_PROMPT = CHAT_SYSTEM_PROMPT + """
-5) Always gather context with a tool call before answering. If the user asks about a specific date range, call journal_list_entries, then journal_get_entry for the entries of interest; otherwise call journal_search (optionally restricted to a date range) to retrieve the most relevant chunks. If a search hit needs more context, call journal_get_entry to read the full entry. Never answer without tool results."""
+5) Always gather context with a tool call before answering. If the user asks about a specific date range, call journal_list_entries, then journal_get_entry for the entries of interest; otherwise call journal_search (optionally restricted to a date range) to retrieve the most relevant chunks. If a search hit needs more context, call journal_get_entry to read the full entry. Never answer without tool results.
+    (NOTE: chunks wont give you full context, they are just semantically atomic events/thoughts/emotions/observations etc.)
+"""
 CHUNK_SYSTEM_PROMPT = """You are a text processing engine designed for a memory retrieval system. Your task is to extract "Semantically Atomic" chunks (which can be events, thoughts, emotions, or observations) from raw journal entries.
 CRITICAL DEFINITION - SEMANTIC ATOMICITY:
 A chunk must be the smallest possible unit of information that remains FULLY SELF-CONTAINED.
@@ -52,7 +54,7 @@ TOOLS = [
         'type': 'function',
         'function': {
             'name': 'journal_search',
-            'description': 'Semantic search over journal chunks using cosine similarity. Returns the most relevant chunks from the journal, each prefixed with [timestamp #chunk-id]. Optionally restrict the search to an inclusive date range.',
+            'description': 'Semantic search over journal chunks using cosine similarity. Returns chunks from the journal using cosine similarity, each prefixed with [timestamp #chunk-id]. Optionally restrict the search to an inclusive date range. (NOTE: chunks wont give you full context, they are just semantically atomic events/thoughts/emotions/observations etc.)',
             'parameters': {
                 'type': 'object',
                 'properties': {
