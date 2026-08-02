@@ -13,7 +13,7 @@ from pathlib import Path
 
 import openai
 
-JRNL_DEBUG = os.environ.get('JRNL_DEBUG', False)
+JRNL_DEBUG = bool(int(os.environ.get('JRNL_DEBUG', False)))
 JRNL_FOLDER = Path(os.environ.get('JRNL_FOLDER', '~/.jrnl')).expanduser()
 JRNL_BASE_URL = os.environ.get('JRNL_BASE_URL', 'http://localhost:8080/v1')
 JRNL_API_KEY = os.environ.get('JRNL_API_KEY', 'api-key')
