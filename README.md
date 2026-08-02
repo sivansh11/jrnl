@@ -45,12 +45,13 @@ Breaks journal entries down into semantically atomic chunks (events, thoughts, e
 
 `jrnl ask "query" [--threshold F] [--top N] [--no-tools]`
 
-By default, `ask` gives the LLM two tools and lets it decide what to fetch:
+By default, `ask` gives the LLM three tools and lets it decide what to fetch:
 
-- `journal_search` — embeds the query and retrieves the most similar chunks from the journal (using cosine similarity against the embedding threshold), then returns them as context.
-- `journal_get_entries` — returns all chunks from entries within an inclusive date range (`DD-MM-YYYY`), e.g. to answer date-specific questions.
+- `journal_search` — embeds the query and retrieves the most similar chunks from the journal (using cosine similarity against the embedding threshold), optionally restricted to an inclusive date range (`DD-MM-YYYY`), then returns them as context.
+- `journal_list_entries` — lists the timestamps of all entries within an inclusive date range, e.g. to scope date-specific questions before fetching.
+- `journal_get_entry` — retrieves the full journal entry for an exact timestamp (`DD-MM-YYYY--HH-MM-SS`), e.g. to read the full write behind a search hit.
 
-The LLM calls the tools iteratively and answers using the retrieved chunks, citing their timestamps and chunk ids. Pass `--no-tools` to disable tool calling and use the old single-shot semantic retrieval. The `--threshold` and `--top` flags set the defaults for `journal_search`.
+The LLM calls the tools iteratively and answers using the retrieved sources, citing timestamps (and chunk ids when the source is a chunk). Pass `--no-tools` to disable tool calling and use the old single-shot semantic retrieval. The `--threshold` and `--top` flags set the defaults for `journal_search`.
 
 ### reembed
 
