@@ -1,6 +1,6 @@
 # JRNL
 
-An offline-first AI journaling tool. All data lives on your machine in `~/.jrnl`.
+An offline-first local AI journaling tool you can chat with. All data lives on your machine in `~/.jrnl`.
 
 ## Install
 Install to `~/.local` with the one-liner:
