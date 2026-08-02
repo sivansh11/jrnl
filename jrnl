@@ -548,7 +548,7 @@ def edit_entry() -> None:
     if not entry.strip():
         print('empty entry, not saved', file=sys.stderr)
         return
-    add(entry)
+    add(entry.strip())
 
 
 def main():
