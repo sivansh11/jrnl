@@ -15,7 +15,7 @@ import openai
 
 JRNL_DEBUG = bool(int(os.environ.get('JRNL_DEBUG', False)))
 JRNL_FOLDER = Path(os.environ.get('JRNL_FOLDER', '~/.jrnl')).expanduser()
-JRNL_BASE_URL = os.environ.get('JRNL_BASE_URL', 'http://localhost:8080/v1')
+JRNL_BASE_URL = os.environ.get('JRNL_BASE_URL', 'http://localhost:9931/v1')
 JRNL_API_KEY = os.environ.get('JRNL_API_KEY', 'api-key')
 JRNL_EXTRACTION_MODEL = os.environ.get('JRNL_EXTRACTION_MODEL', 'LiquidAI/LFM3-1.7B-GGUF:Q6_K')
 JRNL_CHAT_MODEL = os.environ.get('JRNL_CHAT_MODEL', JRNL_EXTRACTION_MODEL)
